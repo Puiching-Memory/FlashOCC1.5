@@ -1,0 +1,10 @@
+# Legacy dataset SDKs pull transitive deps that are not Python 3.14 friendly.
+lyft_dataset_sdk; python_version < "3.12"
+networkx>=3.0
+numba>=0.62.0
+numpy
+plyfile
+scikit-image
+# by default we also use tensorboard to log results
+tensorboard
+trimesh>=2.35.39,<2.35.40

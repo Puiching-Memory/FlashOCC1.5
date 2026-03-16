@@ -1,0 +1,12 @@
+# pycuda
+# lyft_dataset_sdk
+# networkx
+# numba
+# numpy
+# plyfile
+# scikit-image
+# tensorboard
+trimesh
+pandas
+timm
+# yapf
