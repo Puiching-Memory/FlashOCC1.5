@@ -1482,3 +1482,28 @@ class BEVDepthPanoTRT(BEVDepthPano):
         mlp_input = self.img_view_transformer.get_mlp_input(*input[1:7])
                 # sensor2keyegos, ego2globals, intrins, post_rots, post_trans, bda)  # (B, N_views, 27)
         return self.img_view_transformer.voxel_pooling_prepare_v2(coor), mlp_input
+
+
+# ---------------------------------------------------------------------------
+# BEVDetOCC_INR  —  INR 连续空间占用超分检测器
+# ---------------------------------------------------------------------------
+
+@DETECTORS.register_module()
+class BEVDetOCC_INR(BEVDetOCC):
+    """BEVDet-OCC with Implicit Neural Representation occupancy head.
+
+    Differences from BEVDetOCC:
+      - forward_occ_train uses occ_head.forward_train_loss() for efficient
+        random-point-sampling (avoids full voxel tensor materialisation).
+      - simple_test_occ calls occ_head.forward() for full-grid inference.
+    """
+
+    def forward_occ_train(self, img_feats, voxel_semantics, mask_camera):
+        return self.occ_head.forward_train_loss(
+            img_feats, voxel_semantics, mask_camera
+        )
+
+    def simple_test_occ(self, img_feats, img_metas=None):
+        occ_pred = self.occ_head(img_feats)
+        occ_preds = self.occ_head.get_occ(occ_pred, img_metas)
+        return occ_preds

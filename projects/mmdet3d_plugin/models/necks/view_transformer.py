@@ -284,10 +284,10 @@ class LSSViewTransformer(BaseModule):
         B, N, D, H, W, _ = coor.shape
         num_points = B * N * D * H * W
         # record the index of selected points for acceleration purpose
-        ranks_depth = torch.range(
-            0, num_points - 1, dtype=torch.int, device=coor.device)    # (B*N*D*H*W, ), [0, 1, ..., B*N*D*fH*fW-1]
-        ranks_feat = torch.range(
-            0, num_points // D - 1, dtype=torch.int, device=coor.device)   # [0, 1, ...,B*N*fH*fW-1]
+        ranks_depth = torch.arange(
+            0, num_points, dtype=torch.int, device=coor.device)    # (B*N*D*H*W, ), [0, 1, ..., B*N*D*fH*fW-1]
+        ranks_feat = torch.arange(
+            0, num_points // D, dtype=torch.int, device=coor.device)   # [0, 1, ...,B*N*fH*fW-1]
         ranks_feat = ranks_feat.reshape(B, N, 1, H, W)
         ranks_feat = ranks_feat.expand(B, N, D, H, W).flatten()     # (B*N*D*fH*fW, )
 
@@ -297,7 +297,7 @@ class LSSViewTransformer(BaseModule):
                 self.grid_interval.to(coor))
         coor = coor.long().view(num_points, 3)      # (B, N, D, fH, fW, 3) --> (B*N*D*fH*fW, 3)
         # (B, N*D*fH*fW) --> (B*N*D*fH*fW, 1)
-        batch_idx = torch.range(0, B - 1).reshape(B, 1). \
+        batch_idx = torch.arange(0, B, device=coor.device).reshape(B, 1). \
             expand(B, num_points // B).reshape(num_points, 1).to(coor)
         coor = torch.cat((coor, batch_idx), 1)      # (B*N*D*fH*fW, 4)   4: (x, y, z, batch_id)
 

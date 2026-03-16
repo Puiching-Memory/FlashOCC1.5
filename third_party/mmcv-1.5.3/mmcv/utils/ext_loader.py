@@ -68,5 +68,5 @@ else:
 
 
 def check_ops_exist() -> bool:
-    ext_loader = pkgutil.find_loader('mmcv._ext')
-    return ext_loader is not None
+    import importlib.util
+    return importlib.util.find_spec('mmcv._ext') is not None

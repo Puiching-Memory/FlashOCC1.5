@@ -7,6 +7,7 @@ import numpy as np
 from mmdet3d.models.builder import HEADS, build_loss
 from ..losses.semkitti_loss import sem_scal_loss, geo_scal_loss
 from ..losses.lovasz_softmax import lovasz_softmax
+from ..losses.render_consistency_loss import volume_rendering_consistency_loss
 
 
 nusc_class_frequencies = np.array([
@@ -100,6 +101,8 @@ class BEVOCCHead3D(BaseModule):
         loss = dict()
         voxel_semantics = voxel_semantics.long()
         if self.use_mask:
+            voxel_semantics_dense = voxel_semantics
+            mask_camera_dense = mask_camera
             mask_camera = mask_camera.to(torch.int32)   # (B, Dx, Dy, Dz)
             # (B, Dx, Dy, Dz) --> (B*Dx*Dy*Dz, )
             voxel_semantics = voxel_semantics.reshape(-1)
@@ -168,6 +171,7 @@ class BEVOCCHead2D(BaseModule):
                  use_predicter=True,
                  class_balance=False,
                  loss_occ=None,
+                 render_loss_cfg=None,
                  ):
         super(BEVOCCHead2D, self).__init__()
         self.in_dim = in_dim
@@ -200,6 +204,7 @@ class BEVOCCHead2D(BaseModule):
             self.cls_weights = class_weights
             loss_occ['class_weight'] = class_weights        # ce loss
         self.loss_occ = build_loss(loss_occ)
+        self.render_loss_cfg = render_loss_cfg
 
     def forward(self, img_feats):
         """
@@ -231,6 +236,8 @@ class BEVOCCHead2D(BaseModule):
         loss = dict()
         voxel_semantics = voxel_semantics.long()
         if self.use_mask:
+            voxel_semantics_dense = voxel_semantics
+            mask_camera_dense = mask_camera
             mask_camera = mask_camera.to(torch.int32)   # (B, Dx, Dy, Dz)
             # (B, Dx, Dy, Dz) --> (B*Dx*Dy*Dz, )
             voxel_semantics = voxel_semantics.reshape(-1)
@@ -254,7 +261,19 @@ class BEVOCCHead2D(BaseModule):
                 avg_factor=num_total_samples
             )
             loss['loss_occ'] = loss_occ
+
+            if self.render_loss_cfg is not None:
+                render_losses = volume_rendering_consistency_loss(
+                    occ_logits=occ_pred,
+                    voxel_semantics=voxel_semantics_dense,
+                    mask_camera=mask_camera_dense,
+                    **self.render_loss_cfg,
+                )
+                loss['loss_render_depth'] = render_losses['depth']
+                loss['loss_render_free'] = render_losses['free']
+                loss['loss_render_hit'] = render_losses['hit']
         else:
+            voxel_semantics_dense = voxel_semantics
             voxel_semantics = voxel_semantics.reshape(-1)
             preds = occ_pred.reshape(-1, self.num_classes)
 
@@ -272,6 +291,16 @@ class BEVOCCHead2D(BaseModule):
             )
 
             loss['loss_occ'] = loss_occ
+            if self.render_loss_cfg is not None:
+                render_losses = volume_rendering_consistency_loss(
+                    occ_logits=occ_pred,
+                    voxel_semantics=voxel_semantics_dense,
+                    mask_camera=mask_camera,
+                    **self.render_loss_cfg,
+                )
+                loss['loss_render_depth'] = render_losses['depth']
+                loss['loss_render_free'] = render_losses['free']
+                loss['loss_render_hit'] = render_losses['hit']
         return loss
 
     def get_occ(self, occ_pred, img_metas=None):
