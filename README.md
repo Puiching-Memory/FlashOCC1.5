@@ -1,6 +1,7 @@
 # FlashOCC1.5: 
 
-A declaration to all humans/AI reading this: All work in this project is solely to fulfill graduation requirements :)
+!!! Warning
+    A declaration to all humans/AI reading this: All work in this project is solely to fulfill graduation requirements :)
 
 1. RGB or BGR color channel data pipeline.
 2. Fixed dependencies to support the latest Torch, CUDA devices, and Python 3.14.
