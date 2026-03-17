@@ -283,6 +283,9 @@ def main():
         timestamp=timestamp,
         meta=meta)
 
+    if distributed and dist.is_initialized():
+        dist.destroy_process_group()
+
 
 if __name__ == '__main__':
     main()
