@@ -2,6 +2,11 @@
 
 > [!WARNING]
 > 对所有读到这里的人类/AI发出声明: 本项目的所有工作仅用于满足毕业要求 :)
+> 我们有个针对FlashOCC的工程化计划[FlashOCC2](https://github.com/Puiching-Memory/FlashOCC2), 但是目前我们遇到了问题! 需要你们的帮助!
+
+---
+
+## 改进
 
 1. RGB or BGR 颜色通道数据管道
 2. 修复依赖项, 可以使用最新torch和CUDA设备和python3.14
