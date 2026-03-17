@@ -1,7 +1,7 @@
 # FlashOCC1.5
 
 > [!WARNING]
-> Statement for all humans/AIs reading this: All work in this project is only to satisfy graduation requirements :)
+> Statement for all humans/AIs reading this: All work in this project is only to satisfy graduation requirements :)  
 > We have an engineering plan for FlashOCC called [FlashOCC2](https://github.com/Puiching-Memory/FlashOCC2), but we are currently facing some issues! We need your help!
 
 ---
