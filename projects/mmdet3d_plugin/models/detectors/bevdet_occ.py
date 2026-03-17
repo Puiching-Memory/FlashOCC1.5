@@ -130,17 +130,18 @@ class BEVDetOCC(BEVDet):
         losses = dict()
         voxel_semantics = kwargs['voxel_semantics']     # (B, Dx, Dy, Dz)
         mask_camera = kwargs['mask_camera']     # (B, Dx, Dy, Dz)
+        occ_weights = kwargs.get('occ_weights', None)
 
         occ_bev_feature = img_feats[0]
         if self.upsample:
             occ_bev_feature = F.interpolate(occ_bev_feature, scale_factor=2,
                                             mode='bilinear', align_corners=True)
 
-        loss_occ = self.forward_occ_train(occ_bev_feature, voxel_semantics, mask_camera)
+        loss_occ = self.forward_occ_train(occ_bev_feature, voxel_semantics, mask_camera, occ_weights)
         losses.update(loss_occ)
         return losses
 
-    def forward_occ_train(self, img_feats, voxel_semantics, mask_camera):
+    def forward_occ_train(self, img_feats, voxel_semantics, mask_camera, voxel_weights=None):
         """
         Args:
             img_feats: (B, C, Dz, Dy, Dx) / (B, C, Dy, Dx)
@@ -154,6 +155,7 @@ class BEVDetOCC(BEVDet):
             outs,  # (B, Dx, Dy, Dz, n_cls)
             voxel_semantics,  # (B, Dx, Dy, Dz)
             mask_camera,  # (B, Dx, Dy, Dz)
+            voxel_weights=voxel_weights,
         )
         return loss_occ
 

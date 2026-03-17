@@ -89,12 +89,13 @@ class BEVOCCHead3D(BaseModule):
 
         return occ_pred
 
-    def loss(self, occ_pred, voxel_semantics, mask_camera):
+    def loss(self, occ_pred, voxel_semantics, mask_camera, voxel_weights=None):
         """
         Args:
             occ_pred: (B, Dx, Dy, Dz, n_cls)
             voxel_semantics: (B, Dx, Dy, Dz)
             mask_camera: (B, Dx, Dy, Dz)
+            voxel_weights: (B, Dx, Dy, Dz), optional per-voxel loss weights
         Returns:
 
         """
@@ -103,7 +104,9 @@ class BEVOCCHead3D(BaseModule):
         if self.use_mask:
             voxel_semantics_dense = voxel_semantics
             mask_camera_dense = mask_camera
-            mask_camera = mask_camera.to(torch.int32)   # (B, Dx, Dy, Dz)
+            mask_camera = mask_camera.to(torch.float32)   # (B, Dx, Dy, Dz)
+            if voxel_weights is not None:
+                mask_camera = mask_camera * voxel_weights.to(mask_camera.dtype)
             # (B, Dx, Dy, Dz) --> (B*Dx*Dy*Dz, )
             voxel_semantics = voxel_semantics.reshape(-1)
             # (B, Dx, Dy, Dz, n_cls) --> (B*Dx*Dy*Dz, n_cls)
@@ -224,12 +227,13 @@ class BEVOCCHead2D(BaseModule):
 
         return occ_pred
 
-    def loss(self, occ_pred, voxel_semantics, mask_camera):
+    def loss(self, occ_pred, voxel_semantics, mask_camera, voxel_weights=None):
         """
         Args:
             occ_pred: (B, Dx, Dy, Dz, n_cls)
             voxel_semantics: (B, Dx, Dy, Dz)
             mask_camera: (B, Dx, Dy, Dz)
+            voxel_weights: (B, Dx, Dy, Dz), optional per-voxel loss weights
         Returns:
 
         """
@@ -238,7 +242,9 @@ class BEVOCCHead2D(BaseModule):
         if self.use_mask:
             voxel_semantics_dense = voxel_semantics
             mask_camera_dense = mask_camera
-            mask_camera = mask_camera.to(torch.int32)   # (B, Dx, Dy, Dz)
+            mask_camera = mask_camera.to(torch.float32)   # (B, Dx, Dy, Dz)
+            if voxel_weights is not None:
+                mask_camera = mask_camera * voxel_weights.to(mask_camera.dtype)
             # (B, Dx, Dy, Dz) --> (B*Dx*Dy*Dz, )
             voxel_semantics = voxel_semantics.reshape(-1)
             # (B, Dx, Dy, Dz, n_cls) --> (B*Dx*Dy*Dz, n_cls)

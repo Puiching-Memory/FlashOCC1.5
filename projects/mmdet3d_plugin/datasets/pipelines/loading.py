@@ -541,3 +541,156 @@ class LoadOccGTFromFile(object):
 
         return results
 
+
+@PIPELINES.register_module()
+class TemporalSweepOccupancyDensification(object):
+    """Build temporal-completion supervision from multi-sweep LiDAR points.
+
+    The module aggregates current-frame LiDAR points and neighboring sweeps,
+    voxelizes them in the occupancy grid, then enlarges supervision on temporal
+    completion voxels (newly covered occupied voxels from multi-frame fusion).
+    """
+
+    def __init__(self,
+                 point_cloud_range,
+                 voxel_size,
+                 sweeps_num=6,
+                 load_dim=5,
+                 use_dim=(0, 1, 2),
+                 include_current=True,
+                 min_points_per_voxel=1,
+                 dilation_xy=0,
+                 dilation_z=0,
+                 free_class_idx=17,
+                 completion_weight=2.0,
+                 file_client_args=dict(backend='disk')):
+        self.point_cloud_range = np.array(point_cloud_range, dtype=np.float32)
+        self.voxel_size = np.array(voxel_size, dtype=np.float32)
+        self.sweeps_num = sweeps_num
+        self.load_dim = load_dim
+        self.use_dim = list(use_dim)
+        self.include_current = include_current
+        self.min_points_per_voxel = int(min_points_per_voxel)
+        self.dilation_xy = int(dilation_xy)
+        self.dilation_z = int(dilation_z)
+        self.free_class_idx = int(free_class_idx)
+        self.completion_weight = float(completion_weight)
+        self.file_client_args = file_client_args.copy()
+        self.file_client = None
+
+    def _load_points(self, pts_filename):
+        if self.file_client is None:
+            self.file_client = mmcv.FileClient(**self.file_client_args)
+        try:
+            pts_bytes = self.file_client.get(pts_filename)
+            points = np.frombuffer(pts_bytes, dtype=np.float32)
+        except ConnectionError:
+            mmcv.check_file_exist(pts_filename)
+            if pts_filename.endswith('.npy'):
+                points = np.load(pts_filename)
+            else:
+                points = np.fromfile(pts_filename, dtype=np.float32)
+        return points
+
+    def _points_to_dense_mask(self, xyz, grid_shape):
+        x_min, y_min, z_min = self.point_cloud_range[:3]
+        x_max, y_max, z_max = self.point_cloud_range[3:]
+        sx, sy, sz = self.voxel_size
+
+        valid = (
+            (xyz[:, 0] >= x_min) & (xyz[:, 0] < x_max) &
+            (xyz[:, 1] >= y_min) & (xyz[:, 1] < y_max) &
+            (xyz[:, 2] >= z_min) & (xyz[:, 2] < z_max)
+        )
+        xyz = xyz[valid]
+        if xyz.shape[0] == 0:
+            return np.zeros(grid_shape, dtype=bool)
+
+        ix = np.floor((xyz[:, 0] - x_min) / sx).astype(np.int32)
+        iy = np.floor((xyz[:, 1] - y_min) / sy).astype(np.int32)
+        iz = np.floor((xyz[:, 2] - z_min) / sz).astype(np.int32)
+
+        ix = np.clip(ix, 0, grid_shape[0] - 1)
+        iy = np.clip(iy, 0, grid_shape[1] - 1)
+        iz = np.clip(iz, 0, grid_shape[2] - 1)
+
+        counts = np.zeros(grid_shape, dtype=np.int16)
+        np.add.at(counts, (ix, iy, iz), 1)
+        dense_mask = counts >= self.min_points_per_voxel
+
+        if self.dilation_xy <= 0 and self.dilation_z <= 0:
+            return dense_mask
+
+        expanded = dense_mask.copy()
+        for dx in range(-self.dilation_xy, self.dilation_xy + 1):
+            for dy in range(-self.dilation_xy, self.dilation_xy + 1):
+                for dz in range(-self.dilation_z, self.dilation_z + 1):
+                    if dx == 0 and dy == 0 and dz == 0:
+                        continue
+                    src_x0 = max(0, -dx)
+                    src_x1 = min(grid_shape[0], grid_shape[0] - dx)
+                    src_y0 = max(0, -dy)
+                    src_y1 = min(grid_shape[1], grid_shape[1] - dy)
+                    src_z0 = max(0, -dz)
+                    src_z1 = min(grid_shape[2], grid_shape[2] - dz)
+
+                    dst_x0 = max(0, dx)
+                    dst_x1 = min(grid_shape[0], grid_shape[0] + dx)
+                    dst_y0 = max(0, dy)
+                    dst_y1 = min(grid_shape[1], grid_shape[1] + dy)
+                    dst_z0 = max(0, dz)
+                    dst_z1 = min(grid_shape[2], grid_shape[2] + dz)
+
+                    expanded[dst_x0:dst_x1, dst_y0:dst_y1, dst_z0:dst_z1] |= \
+                        dense_mask[src_x0:src_x1, src_y0:src_y1, src_z0:src_z1]
+        return expanded
+
+    def __call__(self, results):
+        semantics = results['voxel_semantics']
+        mask_camera = results['mask_camera']
+        grid_shape = tuple(semantics.shape)
+
+        points_xyz = []
+        if self.include_current and 'points' in results:
+            curr_points = results['points']
+            if hasattr(curr_points, 'tensor'):
+                curr_xyz = curr_points.tensor[:, :3].cpu().numpy()
+            else:
+                curr_xyz = np.asarray(curr_points)[:, :3]
+            points_xyz.append(curr_xyz)
+
+        sweeps = results.get('sweeps', [])
+        if len(sweeps) > 0 and self.sweeps_num > 0:
+            sweep_count = min(self.sweeps_num, len(sweeps))
+            for idx in range(sweep_count):
+                sweep = sweeps[idx]
+                sweep_points = self._load_points(sweep['data_path'])
+                sweep_points = np.copy(sweep_points).reshape(-1, self.load_dim)
+                sweep_points = sweep_points[:, self.use_dim]
+                sweep_xyz = sweep_points[:, :3]
+                sweep_xyz = sweep_xyz @ sweep['sensor2lidar_rotation'].T
+                sweep_xyz += sweep['sensor2lidar_translation']
+                points_xyz.append(sweep_xyz)
+
+        if len(points_xyz) == 0:
+            results['occ_weights'] = torch.ones_like(mask_camera, dtype=torch.float32)
+            return results
+
+        merged_xyz = np.concatenate(points_xyz, axis=0)
+        dense_mask = self._points_to_dense_mask(merged_xyz, grid_shape)
+
+        semantics_np = semantics.cpu().numpy() if torch.is_tensor(semantics) else np.asarray(semantics)
+        mask_camera_np = mask_camera.bool().cpu().numpy() if torch.is_tensor(mask_camera) else np.asarray(mask_camera).astype(bool)
+
+        occupied_mask = semantics_np != self.free_class_idx
+        completion_mask = dense_mask & occupied_mask & (~mask_camera_np)
+        dense_supervise_mask = mask_camera_np | completion_mask
+
+        occ_weights = np.ones(grid_shape, dtype=np.float32)
+        occ_weights[completion_mask] = self.completion_weight
+
+        results['mask_camera'] = torch.from_numpy(dense_supervise_mask).to(mask_camera.device if torch.is_tensor(mask_camera) else 'cpu')
+        results['occ_weights'] = torch.from_numpy(occ_weights)
+        results['temporal_completion_mask'] = torch.from_numpy(completion_mask)
+        return results
+
