@@ -169,7 +169,9 @@ class CustomFocalLoss(nn.Module):
                  alpha=0.25,
                  reduction='mean',
                  loss_weight=100.0,
-                 activated=False):
+                 activated=False,
+                 class_weight=None,
+                 ignore_index=255):
         """`Focal Loss <https://arxiv.org/abs/1708.02002>`_
         Args:
             use_sigmoid (bool, optional): Whether to the prediction is
@@ -195,6 +197,8 @@ class CustomFocalLoss(nn.Module):
         self.reduction = reduction
         self.loss_weight = loss_weight
         self.activated = activated
+        self.class_weight = class_weight
+        self.ignore_index = ignore_index
         H, W = 200, 200
 
         xy, yx = torch.meshgrid(
@@ -204,14 +208,69 @@ class CustomFocalLoss(nn.Module):
         c = torch.stack([xy, yx], 2)
         c = torch.norm(c, 2, -1)
         c_max = c.max()
-        self.c = (c / c_max + 1).cuda()
+        self.register_buffer('c', c / c_max + 1, persistent=False)
+
+    def _get_class_weight(self, pred):
+        if self.class_weight is None:
+            return None
+        if isinstance(self.class_weight, torch.Tensor):
+            return self.class_weight.to(device=pred.device, dtype=pred.dtype)
+        return pred.new_tensor(self.class_weight)
+
+    def _forward_flat(self,
+                      pred,
+                      target,
+                      weight=None,
+                      avg_factor=None,
+                      ignore_index=255,
+                      reduction='mean'):
+        valid_mask = target != ignore_index
+        if not valid_mask.any():
+            return pred.sum() * 0.0
+
+        pred = pred[valid_mask]
+        target = target[valid_mask]
+        sample_weight = None
+
+        if weight is not None:
+            sample_weight = weight.reshape(-1)[valid_mask].to(device=pred.device, dtype=pred.dtype)
+
+        class_weight = self._get_class_weight(pred)
+        if class_weight is not None:
+            focal_class_weight = class_weight[target]
+            sample_weight = focal_class_weight if sample_weight is None else sample_weight * focal_class_weight
+
+        if self.use_sigmoid:
+            if self.activated:
+                calculate_loss_func = py_focal_loss_with_prob
+            else:
+                if torch.cuda.is_available() and pred.is_cuda:
+                    calculate_loss_func = sigmoid_focal_loss
+                else:
+                    num_classes = pred.size(1)
+                    target = F.one_hot(target, num_classes=num_classes + 1)
+                    target = target[:, :num_classes]
+                    calculate_loss_func = py_sigmoid_focal_loss
+
+            loss_cls = self.loss_weight * calculate_loss_func(
+                pred,
+                target.to(torch.long),
+                sample_weight,
+                gamma=self.gamma,
+                alpha=self.alpha,
+                reduction=reduction,
+                avg_factor=avg_factor)
+        else:
+            raise NotImplementedError
+
+        return loss_cls
 
     def forward(self,
                 pred,
                 target,
                 weight=None,
                 avg_factor=None,
-                ignore_index=255,
+                ignore_index=None,
                 reduction_override=None):
         """Forward function.
         Args:
@@ -227,21 +286,35 @@ class CustomFocalLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated loss
         """
+        assert reduction_override in (None, 'none', 'mean', 'sum')
+        reduction = (
+            reduction_override if reduction_override else self.reduction)
+        if ignore_index is None:
+            ignore_index = self.ignore_index
+
+        if pred.dim() == 2 and target.dim() == 1:
+            return self._forward_flat(
+                pred,
+                target,
+                weight=weight,
+                avg_factor=avg_factor,
+                ignore_index=ignore_index,
+                reduction=reduction)
+
         B, H, W, D = target.shape
 
         c = self.c[None, :, :, None].repeat(B, 1, 1, D).reshape(-1)
 
         visible_mask = (target != ignore_index).reshape(-1).nonzero().squeeze(-1)
-        weight_mask = weight[None, :] * c[visible_mask, None]
-        # visible_mask[:, None]
+        class_weight = self._get_class_weight(pred)
+        if class_weight is None:
+            class_weight = pred.new_ones(pred.size(1))
+        weight_mask = class_weight[None, :] * c[visible_mask, None]
 
         num_classes = pred.size(1)
         pred = pred.permute(0, 2, 3, 4, 1).reshape(-1, num_classes)[visible_mask]
         target = target.reshape(-1)[visible_mask]
 
-        assert reduction_override in (None, 'none', 'mean', 'sum')
-        reduction = (
-            reduction_override if reduction_override else self.reduction)
         if self.use_sigmoid:
             if self.activated:
                 calculate_loss_func = py_focal_loss_with_prob
