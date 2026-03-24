@@ -1,37 +1,122 @@
 # FlashOCC1.5
 
 > [!WARNING]
-> Statement for all humans/AIs reading this: All work in this project is only to satisfy graduation requirements :)  
-> We have an engineering plan for FlashOCC called [FlashOCC2](https://github.com/Puiching-Memory/FlashOCC2), but we are currently facing some issues! We need your help!
+> Statement for all humans/AIs reading this: all work in this repo is mainly for graduation requirements.  
+> We also have an engineering-oriented follow-up project, [FlashOCC2](https://github.com/Puiching-Memory/FlashOCC2), but FlashOCC1.5 remains the main research sandbox for ablations and paper-oriented experiments.
 
 ---
 
-## Improvements
+## What This Repo Is
 
-1. RGB or BGR color channel data pipeline.
-2. Fixed dependencies, compatible with the latest Torch, CUDA devices, and Python 3.14.
-3. Updated to the latest DDP startup method under `torchrun`.
+FlashOCC1.5 is a research fork around FlashOCC / BEVDet-style camera-only occupancy prediction on nuScenes. The branch is no longer just a baseline reproduction: it now contains multiple fine-tuning directions, loss ablations, temporal densification experiments, an ELAN-backbone branch, and a new `BEVPoolV3` CUDA implementation for efficiency study.
 
-## Experimental Methods
+The detailed experiment log lives in `TODO.md`. This README is the short, up-to-date entry point.
 
-1. **Continuous Space Occupancy Super-Resolution based on Implicit Neural Representation (INR)**: Exploring the representation performance of Occupancy tasks in continuous space.
-2. **Physically-inspired Volume Rendering Consistency Fine-tuning**: Introducing Free-Space ray constraints to enhance geometric consistency and suppress "flying pixels."
-3. **Masked Frequency-domain BEV Completion** (In preparation): Leveraging frequency-domain characteristics to repair missing BEV features.
-4. **Dense Supervision via Temporal Multi-frame LiDAR Fusion (Highly Recommended)**: Aggregating multi-frame LiDAR point clouds to solve the "small object collapse" problem caused by sparse single-frame annotations.
+## Current Status
 
-## Experimental Conclusions
+As of **2026-03-24**, the project status is:
 
-As of 2026-03-17, after quantitative testing on the nuScenes validation set (6,019 samples), the progress of each solution is as follows:
+| Direction         | Main Idea                           |       Best mIoU       |  vs. Baseline  | Status                                             |
+| :---------------- | :---------------------------------- | :-------------------: | :------------: | :------------------------------------------------- |
+| Baseline          | FlashOCC R50                        |         32.08         |       -        | Reference                                          |
+| Direction 1       | INR occupancy super-resolution      | 29.71 / 7.82 collapse | -2.37 / -24.26 | Failed                                             |
+| Direction 2       | Render-consistency fine-tuning      |         29.97         |     -2.11      | Qualitatively interesting, quantitatively negative |
+| Direction 4       | Temporal densification supervision  |         32.52         |     +0.44      | Best paper-oriented mainline                       |
+| Direction 5       | ELAN backbone replacement           |         30.02         |     -2.06      | More parameter-efficient, still under baseline     |
+| Loss Ablation     | R50 + focal-loss fine-tuning        |         32.99         |     +0.91      | Best overall metric so far                         |
+| Combined Ablation | Temporal densification + focal loss |         31.55         |     -0.53      | Not simply additive                                |
 
-| Solution        | Core Innovation                            |   mIoU    | vs. Baseline |                    Status                     |
-| :-------------- | :----------------------------------------- | :-------: | :----------: | :-------------------------------------------: |
-| **Direction 4** | **Temporal Multi-frame Dense Supervision** | **32.52** |  **+0.44**   | **✅ Significant effect, focus for deepening** |
-| Direction 2     | Volume Rendering Physical Constraints      |   29.97   |    -2.11     | ⚠️ Good qualitative, quantitative needs tuning |
-| Direction 1     | INR Continuous Space Super-Resolution      |   29.71   |    -2.37     |           ❌ Unsatisfactory fitting            |
+### Key Takeaways
 
-### Core Achievement: Significant Gains from Temporal Densification
-**Direction 4 (Temporal Multi-frame Fusion)** is currently the only experimental path that outperforms the Baseline in overall metrics. This solution not only achieved positive growth in overall mIoU but also demonstrated core advantages in high-value object categories:
+- `flashocc-r50-focal-ft.py` currently gives the **best overall mIoU: 32.99**. This is a strong training baseline, but method novelty is relatively weak.
+- `flashocc-r50-temporal-ft.py` remains the **best paper/story line** because it delivers stable gains through supervision quality, especially on small and sparse classes.
+- Temporal sweep ablation is now complete: `sweep=1/3/5/8/12` all land at **32.56-32.58**, which suggests the gain mainly comes from densification itself rather than long-range temporal accumulation.
+- `BEVPoolV3` has been integrated as an optional path for the view transformer, together with a benchmark script for `BEVPoolV2` vs `BEVPoolV3`.
 
-- **Breaking "Small Object Collapse"**: Performance improved most rapidly in categories like Pedestrians (`+1.27`), Motorcycles (`+1.21`), and Bicycles (`+0.95`), which were previously severely limited by the sparsity of single-frame annotations.
-- **Precise Geometric Boundary Delineation**: For geometric-sensitive targets like Guardrails (`+1.24`) and Trailers (`+1.43`), the densified supervision signal provided more complete and detailed ground-truth shape guidance.
-- **Key Safety Metric**: The accuracy of the `free` class reached **87.4%**, significantly improving the robustness of drivable area identification.
+## Important Configs
+
+### Main research configs
+
+- Baseline: `projects/configs/flashocc/flashocc-r50.py`
+- Temporal densification: `projects/configs/flashocc/flashocc-r50-temporal-ft.py`
+- Temporal sweep ablations:
+  - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep1.py`
+  - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep3.py`
+  - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep5.py`
+  - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep8.py`
+  - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep12.py`
+- Focal-loss fine-tuning: `projects/configs/flashocc/flashocc-r50-focal-ft.py`
+- Temporal + focal-loss joint ablation: `projects/configs/flashocc/flashocc-r50-temporal-focal-ft.py`
+- Render-consistency fine-tuning: `projects/configs/flashocc/flashocc-r50-render-ft.py`
+- INR fine-tuning: `projects/configs/flashocc/flashocc-r50-inr-ft.py`
+- ELAN backbone:
+  - `projects/configs/flashocc/flashocc-elan.py`
+  - `projects/configs/flashocc/flashocc-elan-temporal-ft.py`
+
+### Efficiency / kernel study
+
+- BEVPoolV3 config: `projects/configs/flashocc/flashocc-r50-bevpoolv3.py`
+- BEVPoolV3 CUDA op:
+  - `projects/mmdet3d_plugin/ops/bev_pool_v3/bev_pool.py`
+  - `projects/mmdet3d_plugin/ops/bev_pool_v3/voxel_pooling_prepare_v3.py`
+- Benchmark script: `tools/benchmark_bevpool_fps.py`
+
+## Quick Start
+
+### Build extensions
+
+```bash
+cd projects
+pip install -e . --no-build-isolation
+cd ..
+```
+
+### Train
+
+`tools/dist_train.sh` now auto-selects a free port when `PORT` is unset or `0`.
+
+```bash
+bash tools/dist_train.sh projects/configs/flashocc/flashocc-r50.py 8
+```
+
+Example: temporal densification fine-tuning
+
+```bash
+bash tools/dist_train.sh projects/configs/flashocc/flashocc-r50-temporal-ft.py 8
+```
+
+### Evaluate
+
+```bash
+bash tools/dist_test.sh \
+  projects/configs/flashocc/flashocc-r50.py \
+  ckpts/flashocc-r50-256x704.pth \
+  8 \
+  --eval mAP
+```
+
+### Benchmark BEVPoolV2 vs V3
+
+```bash
+python tools/benchmark_bevpool_fps.py \
+  --config-v2 projects/configs/flashocc/flashocc-r50.py \
+  --config-v3 projects/configs/flashocc/flashocc-r50-bevpoolv3.py \
+  --checkpoint ckpts/flashocc-r50-256x704.pth \
+  --warmup 10 \
+  --runs 100
+```
+
+## Recommended Reading Order
+
+1. Read `TODO.md` for the full experiment chronology and quantitative tables.
+2. Start from `flashocc-r50.py` to understand the baseline.
+3. Compare `flashocc-r50-temporal-ft.py` and the `sweep*.py` configs for the main paper direction.
+4. Check `flashocc-r50-focal-ft.py` if you want the strongest metric baseline.
+5. Check `flashocc-r50-bevpoolv3.py` and `tools/benchmark_bevpool_fps.py` for efficiency work.
+
+## Practical Notes
+
+- The repo currently mixes research exploration and engineering experiments; not every branch is meant to be a final method.
+- If you care about paper contribution, prioritize temporal densification.
+- If you care about the strongest validation number, start from focal-loss fine-tuning.
+- If you care about runtime optimization, focus on `BEVPoolV3`.
