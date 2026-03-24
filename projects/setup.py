@@ -10,6 +10,23 @@ from torch.utils.cpp_extension import (BuildExtension, CppExtension,
                                        CUDAExtension)
 
 
+def make_cuda_ext_v3(name, module, sources):
+    """Like make_cuda_ext but without __CUDA_NO_HALF_* flags (v3 needs half intrinsics)."""
+    define_macros = []
+    extra_compile_args = {'cxx': []}
+    if torch.cuda.is_available() or os.getenv('FORCE_CUDA', '0') == '1':
+        define_macros += [('WITH_CUDA', None)]
+        extra_compile_args['nvcc'] = ['-O3', '--use_fast_math', '-lineinfo']
+        extension = CUDAExtension
+    else:
+        extension = CppExtension
+    return extension(
+        name='{}.{}'.format(module, name),
+        sources=[os.path.join(*module.split('.'), p) for p in sources],
+        define_macros=define_macros,
+        extra_compile_args=extra_compile_args)
+
+
 def make_cuda_ext(name,
                   module,
                   sources,
@@ -79,6 +96,14 @@ if __name__ == '__main__':
                 sources=[
                     "src/bev_pool.cpp",
                     "src/bev_pool_cuda.cu"
+                ],
+            ),
+            make_cuda_ext_v3(
+                name="bev_pool_v3_ext",
+                module="mmdet3d_plugin.ops.bev_pool_v3",
+                sources=[
+                    "src/bev_pool_v3.cpp",
+                    "src/bev_pool_v3_cuda.cu",
                 ],
             ),
             make_cuda_ext(

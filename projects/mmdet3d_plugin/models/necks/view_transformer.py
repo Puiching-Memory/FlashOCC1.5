@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from mmcv.runner import BaseModule, force_fp32
 from mmdet3d.models.builder import NECKS
-from ...ops import bev_pool_v2
+from ...ops import bev_pool_v2, bev_pool_v3, voxel_pooling_prepare_v3
 from ..model_utils import DepthNet
 import torch.nn.functional as F
 
@@ -43,6 +43,7 @@ class LSSViewTransformer(BaseModule):
         accelerate=False,
         sid=False,
         collapse_z=True,
+        pool_version='v2',
     ):
         super(LSSViewTransformer, self).__init__()
         self.grid_config = grid_config
@@ -58,6 +59,7 @@ class LSSViewTransformer(BaseModule):
         self.accelerate = accelerate
         self.initial_flag = True
         self.collapse_z = collapse_z
+        self.pool_version = pool_version
 
     def create_grid_infos(self, x, y, z, **kwargs):
         """Generate the grid information including the lower bound, interval,
@@ -335,10 +337,69 @@ class LSSViewTransformer(BaseModule):
         ), ranks_feat.int().contiguous(), interval_starts.int().contiguous(
         ), interval_lengths.int().contiguous()
 
+    def voxel_pooling_v3(self, coor, depth, feat):
+        """BEVPoolV3 path — fused prepare + tiled CUDA kernel."""
+        B, N, D, H, W, _ = coor.shape
+        grid_lower = (self.grid_lower_bound[0].item(),
+                      self.grid_lower_bound[1].item(),
+                      self.grid_lower_bound[2].item())
+        grid_size  = (int(self.grid_size[0]), int(self.grid_size[1]),
+                      int(self.grid_size[2]))
+        grid_step  = (self.grid_interval[0].item(),
+                      self.grid_interval[1].item(),
+                      self.grid_interval[2].item())
+        result = voxel_pooling_prepare_v3(
+            coor.reshape(-1, 3).float(), grid_lower, grid_size, grid_step,
+            B, N, D, H, W)
+        ranks_bev, ranks_depth, ranks_feat, \
+            interval_starts, interval_lengths, feat_intervals = result
+        if ranks_feat is None:
+            print('warning ---> no points within the predefined bev receptive field')
+            dummy = feat.new_zeros(
+                feat.shape[0], feat.shape[2],
+                int(self.grid_size[2]), int(self.grid_size[1]),
+                int(self.grid_size[0]))
+            return torch.cat(dummy.unbind(dim=2), 1)
+        feat = feat.permute(0, 1, 3, 4, 2)   # (B, N, fH, fW, C)
+        bev_feat_shape = (B, int(self.grid_size[2]),
+                          int(self.grid_size[1]), int(self.grid_size[0]),
+                          feat.shape[-1])
+        bev_feat = bev_pool_v3(depth, feat, ranks_depth, ranks_feat, ranks_bev,
+                               bev_feat_shape, interval_starts, interval_lengths,
+                               feat_intervals)
+        if self.collapse_z:
+            bev_feat = torch.cat(bev_feat.unbind(dim=2), 1)
+        return bev_feat
+
+    def init_acceleration_v3(self, coor):
+        B, N, D, H, W, _ = coor.shape
+        grid_lower = (self.grid_lower_bound[0].item(),
+                      self.grid_lower_bound[1].item(),
+                      self.grid_lower_bound[2].item())
+        grid_size  = (int(self.grid_size[0]), int(self.grid_size[1]),
+                      int(self.grid_size[2]))
+        grid_step  = (self.grid_interval[0].item(),
+                      self.grid_interval[1].item(),
+                      self.grid_interval[2].item())
+        result = voxel_pooling_prepare_v3(
+            coor.reshape(-1, 3).float(), grid_lower, grid_size, grid_step,
+            B, N, D, H, W)
+        self.ranks_bev, self.ranks_depth, self.ranks_feat, \
+            self.interval_starts, self.interval_lengths, self.feat_intervals_v3 = result
+        if self.ranks_bev is not None:
+            self.ranks_bev   = self.ranks_bev.int().contiguous()
+            self.ranks_feat  = self.ranks_feat.int().contiguous()
+            self.ranks_depth = self.ranks_depth.int().contiguous()
+            self.interval_starts  = self.interval_starts.int().contiguous()
+            self.interval_lengths = self.interval_lengths.int().contiguous()
+
     def pre_compute(self, input):
         if self.initial_flag:
             coor = self.get_ego_coor(*input[1:7])       # (B, N, D, fH, fW, 3)
-            self.init_acceleration_v2(coor)
+            if self.pool_version == 'v3':
+                self.init_acceleration_v3(coor)
+            else:
+                self.init_acceleration_v2(coor)
             self.initial_flag = False
 
     def view_transform_core(self, input, depth, tran_feat):
@@ -368,17 +429,29 @@ class LSSViewTransformer(BaseModule):
             bev_feat_shape = (depth.shape[0], int(self.grid_size[2]),
                               int(self.grid_size[1]), int(self.grid_size[0]),
                               feat.shape[-1])   # (B, Dz, Dy, Dx, C)
-            bev_feat = bev_pool_v2(depth, feat, self.ranks_depth,
-                                   self.ranks_feat, self.ranks_bev,
-                                   bev_feat_shape, self.interval_starts,
-                                   self.interval_lengths)   # (B, C, Dz, Dy, Dx)
+            if self.pool_version == 'v3':
+                fi = getattr(self, 'feat_intervals_v3', None)
+                bev_feat = bev_pool_v3(depth, feat, self.ranks_depth,
+                                       self.ranks_feat, self.ranks_bev,
+                                       bev_feat_shape, self.interval_starts,
+                                       self.interval_lengths, fi)
+            else:
+                bev_feat = bev_pool_v2(depth, feat, self.ranks_depth,
+                                       self.ranks_feat, self.ranks_bev,
+                                       bev_feat_shape, self.interval_starts,
+                                       self.interval_lengths)   # (B, C, Dz, Dy, Dx)
 
             bev_feat = bev_feat.squeeze(2)      # (B, C, Dy, Dx)
         else:
             coor = self.get_ego_coor(*input[1:7])   # (B, N, D, fH, fW, 3)
-            bev_feat = self.voxel_pooling_v2(
-                coor, depth.view(B, N, self.D, H, W),
-                tran_feat.view(B, N, self.out_channels, H, W))      # (B, C*Dz(=1), Dy, Dx)
+            if self.pool_version == 'v3':
+                bev_feat = self.voxel_pooling_v3(
+                    coor, depth.view(B, N, self.D, H, W),
+                    tran_feat.view(B, N, self.out_channels, H, W))
+            else:
+                bev_feat = self.voxel_pooling_v2(
+                    coor, depth.view(B, N, self.D, H, W),
+                    tran_feat.view(B, N, self.out_channels, H, W))      # (B, C*Dz(=1), Dy, Dx)
         return bev_feat, depth
 
     def view_transform(self, input, depth, tran_feat):
