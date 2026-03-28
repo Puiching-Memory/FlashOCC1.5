@@ -267,3 +267,26 @@ checkpoint_config = dict(interval=1, max_keep_ckpts=5)
 # ===> manmade - IoU = 7.62
 # ===> vegetation - IoU = 7.14
 # ===> mIoU of 6019 samples: 18.3
+
+# Test on H800 CUDA 12.8
+# ===> per class IoU of 6019 samples:
+# ===> others - IoU = 6.13
+# ===> barrier - IoU = 34.62
+# ===> bicycle - IoU = 10.17
+# ===> bus - IoU = 38.18
+# ===> car - IoU = 41.48
+# ===> construction_vehicle - IoU = 14.28
+# ===> motorcycle - IoU = 14.07
+# ===> pedestrian - IoU = 14.73
+# ===> traffic_cone - IoU = 13.38
+# ===> trailer - IoU = 26.68
+# ===> truck - IoU = 29.85
+# ===> driveable_surface - IoU = 76.89
+# ===> other_flat - IoU = 34.87
+# ===> sidewalk - IoU = 46.86
+# ===> terrain - IoU = 51.73
+# ===> manmade - IoU = 37.08
+# ===> vegetation - IoU = 32.04
+# ===> mIoU of 6019 samples: 30.77
+# [summary][eval] {'mIoU': array([0.061, 0.346, 0.102, 0.382, 0.415, 0.143, 0.141, 0.147, 0.134,
+#        0.267, 0.298, 0.769, 0.349, 0.469, 0.517, 0.371, 0.32 , 0.878])}

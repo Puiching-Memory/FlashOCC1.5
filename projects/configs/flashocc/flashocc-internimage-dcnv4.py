@@ -47,6 +47,7 @@ model = dict(
     type='BEVDetOCC',
     img_backbone=dict(
         type='FlashInternImage',
+        core_op='DCNv4',
         in_channels=3,
         channels=64,
         depths=(4, 4, 18, 4),

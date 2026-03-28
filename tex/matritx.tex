@@ -1,0 +1,44 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\begin{document}
+
+\begin{table}[t]
+\centering
+\caption{Ablation comparison written from the three provided sources: the baseline log, the continued-training result with focal loss, and the EFOCC result in the main comparison table.}
+\label{tab:ablation_matrix}
+\scriptsize
+\setlength{\tabcolsep}{6pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+Class & Baseline (Tab. 3) & R50 + Focal Loss (Tab. 1) & EFOCC (Ours) & $\Delta$ over R50 + Focal Loss \\
+\midrule
+others & 6.13 & 6.88 & -- & -- \\
+barrier & 34.62 & 38.89 & 39.53 & \textbf{+0.64} \\
+bicycle & 10.17 & 11.66 & 9.50 & \textbf{-2.16} \\
+bus & 38.18 & 40.19 & 37.39 & \textbf{-2.80} \\
+car & 41.48 & 45.26 & 45.68 & \textbf{+0.42} \\
+construction\_vehicle & 14.28 & 17.00 & 15.24 & \textbf{-1.76} \\
+motorcycle & 14.07 & 16.66 & 15.28 & \textbf{-1.38} \\
+pedestrian & 14.73 & 19.28 & 16.76 & \textbf{-2.52} \\
+traffic\_cone & 13.38 & 16.13 & 16.27 & \textbf{+0.14} \\
+trailer & 26.68 & 28.68 & 27.33 & \textbf{-1.35} \\
+truck & 29.85 & 32.57 & 30.41 & \textbf{-2.16} \\
+driveable\_surface & 76.89 & 78.66 & 80.19 & \textbf{+1.53} \\
+other\_flat & 34.87 & 38.28 & 41.08 & \textbf{+2.80} \\
+sidewalk & 46.86 & 48.42 & 50.14 & \textbf{+1.72} \\
+terrain & 51.73 & 51.87 & 54.47 & \textbf{+2.60} \\
+manmade & 37.08 & 37.73 & 40.48 & \textbf{+2.75} \\
+vegetation & 32.04 & 32.71 & 34.94 & \textbf{+2.23} \\
+free & -- & 87.40 & -- & -- \\
+\midrule
+\textbf{Overall mIoU} & \textbf{30.77} & \textbf{32.99} & \textbf{33.04} & \textbf{+0.05} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\end{document}

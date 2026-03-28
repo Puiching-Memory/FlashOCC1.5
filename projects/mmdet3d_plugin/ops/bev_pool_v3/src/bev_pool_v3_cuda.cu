@@ -14,6 +14,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <type_traits>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -33,6 +35,11 @@ template <>
 __device__ __forceinline__ __half from_float<__half>(float v) { return __float2half(v); }
 template <>
 __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float v) { return __float2bfloat16(v); }
+
+template <typename T>
+__device__ __forceinline__ bool is_ptr_aligned(const T* ptr, uintptr_t alignment) {
+    return (reinterpret_cast<uintptr_t>(ptr) & (alignment - 1)) == 0;
+}
 
 // ==================== Tuning knobs ====================
 // TILE_K: points prefetched per tile into shared memory.
@@ -193,79 +200,89 @@ __global__ void bev_pool_v3_bwd_depth_kernel(
     int ch = 0;
 
     // float4 vectorised dot for float32
-    if constexpr (sizeof(scalar_t) == sizeof(float)) {
-        #pragma unroll 4
-        for (; ch + 3 < c; ch += 4) {
-            float4 a = *reinterpret_cast<const float4*>(og + ch);
-            float4 b = *reinterpret_cast<const float4*>(ft + ch);
-            grad_sum += a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    if constexpr (std::is_same_v<scalar_t, float>) {
+        if (is_ptr_aligned(og, 16) && is_ptr_aligned(ft, 16)) {
+            #pragma unroll 4
+            for (; ch + 3 < c; ch += 4) {
+                float4 a = *reinterpret_cast<const float4*>(og + ch);
+                float4 b = *reinterpret_cast<const float4*>(ft + ch);
+                grad_sum += a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+            }
         }
     }
 
     // half2 vectorised dot for float16 — 8 halves (128 bits) per iteration
-    if constexpr (sizeof(scalar_t) == sizeof(__half)) {
-        #pragma unroll 2
-        for (; ch + 7 < c; ch += 8) {
-            // 128-bit loads: 8 halves = 16 bytes each
-            const int4 a_raw = *reinterpret_cast<const int4*>(og + ch);
-            const int4 b_raw = *reinterpret_cast<const int4*>(ft + ch);
-            const __half2 a0 = *reinterpret_cast<const __half2*>(&a_raw.x);
-            const __half2 a1 = *reinterpret_cast<const __half2*>(&a_raw.y);
-            const __half2 a2 = *reinterpret_cast<const __half2*>(&a_raw.z);
-            const __half2 a3 = *reinterpret_cast<const __half2*>(&a_raw.w);
-            const __half2 b0 = *reinterpret_cast<const __half2*>(&b_raw.x);
-            const __half2 b1 = *reinterpret_cast<const __half2*>(&b_raw.y);
-            const __half2 b2 = *reinterpret_cast<const __half2*>(&b_raw.z);
-            const __half2 b3 = *reinterpret_cast<const __half2*>(&b_raw.w);
-            float2 af0 = __half22float2(a0); float2 bf0 = __half22float2(b0);
-            float2 af1 = __half22float2(a1); float2 bf1 = __half22float2(b1);
-            float2 af2 = __half22float2(a2); float2 bf2 = __half22float2(b2);
-            float2 af3 = __half22float2(a3); float2 bf3 = __half22float2(b3);
-            grad_sum += af0.x * bf0.x + af0.y * bf0.y
-                      + af1.x * bf1.x + af1.y * bf1.y
-                      + af2.x * bf2.x + af2.y * bf2.y
-                      + af3.x * bf3.x + af3.y * bf3.y;
+    if constexpr (std::is_same_v<scalar_t, __half>) {
+        if (is_ptr_aligned(og, 16) && is_ptr_aligned(ft, 16)) {
+            #pragma unroll 2
+            for (; ch + 7 < c; ch += 8) {
+                // 128-bit loads: 8 halves = 16 bytes each
+                const int4 a_raw = *reinterpret_cast<const int4*>(og + ch);
+                const int4 b_raw = *reinterpret_cast<const int4*>(ft + ch);
+                const __half2 a0 = *reinterpret_cast<const __half2*>(&a_raw.x);
+                const __half2 a1 = *reinterpret_cast<const __half2*>(&a_raw.y);
+                const __half2 a2 = *reinterpret_cast<const __half2*>(&a_raw.z);
+                const __half2 a3 = *reinterpret_cast<const __half2*>(&a_raw.w);
+                const __half2 b0 = *reinterpret_cast<const __half2*>(&b_raw.x);
+                const __half2 b1 = *reinterpret_cast<const __half2*>(&b_raw.y);
+                const __half2 b2 = *reinterpret_cast<const __half2*>(&b_raw.z);
+                const __half2 b3 = *reinterpret_cast<const __half2*>(&b_raw.w);
+                float2 af0 = __half22float2(a0); float2 bf0 = __half22float2(b0);
+                float2 af1 = __half22float2(a1); float2 bf1 = __half22float2(b1);
+                float2 af2 = __half22float2(a2); float2 bf2 = __half22float2(b2);
+                float2 af3 = __half22float2(a3); float2 bf3 = __half22float2(b3);
+                grad_sum += af0.x * bf0.x + af0.y * bf0.y
+                          + af1.x * bf1.x + af1.y * bf1.y
+                          + af2.x * bf2.x + af2.y * bf2.y
+                          + af3.x * bf3.x + af3.y * bf3.y;
+            }
         }
         // 2-element tail
-        const __half2* og2 = reinterpret_cast<const __half2*>(og);
-        const __half2* ft2 = reinterpret_cast<const __half2*>(ft);
-        for (; ch + 1 < c; ch += 2) {
-            float2 af = __half22float2(og2[ch / 2]);
-            float2 bf = __half22float2(ft2[ch / 2]);
-            grad_sum += af.x * bf.x + af.y * bf.y;
+        if (is_ptr_aligned(og, 4) && is_ptr_aligned(ft, 4)) {
+            const __half2* og2 = reinterpret_cast<const __half2*>(og);
+            const __half2* ft2 = reinterpret_cast<const __half2*>(ft);
+            for (; ch + 1 < c; ch += 2) {
+                float2 af = __half22float2(og2[ch / 2]);
+                float2 bf = __half22float2(ft2[ch / 2]);
+                grad_sum += af.x * bf.x + af.y * bf.y;
+            }
         }
     }
 
     // nv_bfloat16 vectorised dot — 8 bf16 (128 bits) per iteration
-    if constexpr (sizeof(scalar_t) == sizeof(__nv_bfloat16)) {
-        #pragma unroll 2
-        for (; ch + 7 < c; ch += 8) {
-            const int4 a_raw = *reinterpret_cast<const int4*>(og + ch);
-            const int4 b_raw = *reinterpret_cast<const int4*>(ft + ch);
-            const __nv_bfloat162 a0 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.x);
-            const __nv_bfloat162 a1 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.y);
-            const __nv_bfloat162 a2 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.z);
-            const __nv_bfloat162 a3 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.w);
-            const __nv_bfloat162 b0 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.x);
-            const __nv_bfloat162 b1 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.y);
-            const __nv_bfloat162 b2 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.z);
-            const __nv_bfloat162 b3 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.w);
-            float2 af0 = __bfloat1622float2(a0); float2 bf0 = __bfloat1622float2(b0);
-            float2 af1 = __bfloat1622float2(a1); float2 bf1 = __bfloat1622float2(b1);
-            float2 af2 = __bfloat1622float2(a2); float2 bf2 = __bfloat1622float2(b2);
-            float2 af3 = __bfloat1622float2(a3); float2 bf3 = __bfloat1622float2(b3);
-            grad_sum += af0.x * bf0.x + af0.y * bf0.y
-                      + af1.x * bf1.x + af1.y * bf1.y
-                      + af2.x * bf2.x + af2.y * bf2.y
-                      + af3.x * bf3.x + af3.y * bf3.y;
+    if constexpr (std::is_same_v<scalar_t, __nv_bfloat16>) {
+        if (is_ptr_aligned(og, 16) && is_ptr_aligned(ft, 16)) {
+            #pragma unroll 2
+            for (; ch + 7 < c; ch += 8) {
+                const int4 a_raw = *reinterpret_cast<const int4*>(og + ch);
+                const int4 b_raw = *reinterpret_cast<const int4*>(ft + ch);
+                const __nv_bfloat162 a0 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.x);
+                const __nv_bfloat162 a1 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.y);
+                const __nv_bfloat162 a2 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.z);
+                const __nv_bfloat162 a3 = *reinterpret_cast<const __nv_bfloat162*>(&a_raw.w);
+                const __nv_bfloat162 b0 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.x);
+                const __nv_bfloat162 b1 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.y);
+                const __nv_bfloat162 b2 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.z);
+                const __nv_bfloat162 b3 = *reinterpret_cast<const __nv_bfloat162*>(&b_raw.w);
+                float2 af0 = __bfloat1622float2(a0); float2 bf0 = __bfloat1622float2(b0);
+                float2 af1 = __bfloat1622float2(a1); float2 bf1 = __bfloat1622float2(b1);
+                float2 af2 = __bfloat1622float2(a2); float2 bf2 = __bfloat1622float2(b2);
+                float2 af3 = __bfloat1622float2(a3); float2 bf3 = __bfloat1622float2(b3);
+                grad_sum += af0.x * bf0.x + af0.y * bf0.y
+                          + af1.x * bf1.x + af1.y * bf1.y
+                          + af2.x * bf2.x + af2.y * bf2.y
+                          + af3.x * bf3.x + af3.y * bf3.y;
+            }
         }
         // 2-element tail for bf16
-        for (; ch + 1 < c; ch += 2) {
+        if (is_ptr_aligned(og, 4) && is_ptr_aligned(ft, 4)) {
             const __nv_bfloat162* og2 = reinterpret_cast<const __nv_bfloat162*>(og);
             const __nv_bfloat162* ft2 = reinterpret_cast<const __nv_bfloat162*>(ft);
-            float2 af = __bfloat1622float2(og2[ch / 2]);
-            float2 bf = __bfloat1622float2(ft2[ch / 2]);
-            grad_sum += af.x * bf.x + af.y * bf.y;
+            for (; ch + 1 < c; ch += 2) {
+                float2 af = __bfloat1622float2(og2[ch / 2]);
+                float2 bf = __bfloat1622float2(ft2[ch / 2]);
+                grad_sum += af.x * bf.x + af.y * bf.y;
+            }
         }
     }
 

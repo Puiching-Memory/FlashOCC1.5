@@ -46,6 +46,7 @@ As of **2026-03-24**, the project status is:
   - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep8.py`
   - `projects/configs/flashocc/flashocc-r50-temporal-ft-sweep12.py`
 - Focal-loss fine-tuning: `projects/configs/flashocc/flashocc-r50-focal-ft.py`
+- BEV encoder bottleneck ablation: `projects/configs/flashocc/flashocc-r50-bev-bottleneck-ft.py`
 - Temporal + focal-loss joint ablation: `projects/configs/flashocc/flashocc-r50-temporal-focal-ft.py`
 - Render-consistency fine-tuning: `projects/configs/flashocc/flashocc-r50-render-ft.py`
 - INR fine-tuning: `projects/configs/flashocc/flashocc-r50-inr-ft.py`

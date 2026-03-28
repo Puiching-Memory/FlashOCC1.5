@@ -25,3 +25,11 @@ vis/
 *.jpg
 *.png
 .dist_test
+
+# latex
+*.pdf
+*.log
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz
